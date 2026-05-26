@@ -51,6 +51,7 @@ class SPD(Manifold):
     def vectorize(self, A):
         """Vectorizes a symmetric matrix to a n(n+1)/2 vector."""
         n = A.shape[-1]
+        A = torch.from_numpy(A) if isinstance(A, np.ndarray) else A
         mask = torch.triu(torch.ones(n, n)) == 1
         mask = mask.broadcast_to(A.shape).to(A.device)
         vec = A[mask].reshape(*A.shape[:-2], -1)

@@ -122,8 +122,10 @@ class SPDConditionalFlowMatching:
         )
 
         # Convert data to torch tensors
-        X_train = torch.from_numpy(X_train).to(torch.float64).to(DEVICE)
-        X_val = torch.from_numpy(X_val).to(torch.float64).to(DEVICE)
+        #X_train = torch.from_numpy(X_train).to(torch.float64).to(DEVICE)
+        X_train = X_train.to(DEVICE)
+        #X_val = torch.from_numpy(X_val).to(torch.float64).to(DEVICE)
+        X_val = X_val.to(DEVICE)
         y_train = torch.from_numpy(y_train).to(torch.long).to(DEVICE)
         y_val = torch.from_numpy(y_val).to(torch.long).to(DEVICE)
 

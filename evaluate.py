@@ -201,11 +201,12 @@ def compute_classification_metric(X_real, y_real, X_fake, y_fake, clf):
     elif clf == "LR":
         clf = LogisticRegressionCV(
             cv=5,
-            penalty="l2",
             solver="liblinear",
+            l1_ratios=(0,),
             class_weight="balanced",
             random_state=42,
             max_iter=5000,
+            use_legacy_attributes=False,
         )
     elif clf == "dummy":
         clf = DummyClassifier()
@@ -244,8 +245,8 @@ def evaluate_metrics(dataset_method, group, split):
     y_generated_train = np.load(path_maker("conditionals_generated_samples_train"))
     generated_val = np.load(path_maker("covariances_generated_samples_val"))
     y_generated_val = np.load(path_maker("conditionals_generated_samples_val"))
-    training_time = float(np.load(path_maker("training_time")))
-    sampling_time = float(np.load(path_maker("sampling_time")))
+    training_time = np.load(path_maker("training_time")).item()
+    sampling_time = np.load(path_maker("sampling_time")).item()
 
     frac_computation_constraints = (
         fraction_correlation_matrix if NORMALIZE else fraction_covariance_matrix

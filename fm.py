@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import time
 import numpy as np
 import torch
@@ -121,8 +124,14 @@ class DiffeoCFM(DiffeomorphicMixin):
         optimizer, scheduler = self._init_optim(vf)
         loss_fct = torch.nn.MSELoss(reduction="mean")
 
+        PATIENCE  = config.get("PATIENCE", 100)
+        MIN_DELTA = config.get("MIN_DELTA", 1e-6)
+
         train_losses_epoch, val_losses_epoch = [], []
         train_time = []
+        best_val_loss = float("inf")
+        best_state    = None
+        no_improve    = 0
 
         train_loader = FastDataloader(
             x1=X_train,
@@ -173,12 +182,33 @@ class DiffeoCFM(DiffeomorphicMixin):
             val_losses_epoch.append(val_loss_mean)
             train_time.append(time.time() - start)
 
+            # Early stopping (only after warmup)
+            WARMUP_EPOCHS = config["WARMUP_EPOCHS"]
+            if epoch >= WARMUP_EPOCHS:
+                if val_loss_mean < best_val_loss - MIN_DELTA:
+                    best_val_loss = val_loss_mean
+                    best_state    = {k: v.clone() for k, v in vf.state_dict().items()}
+                    no_improve    = 0
+                else:
+                    no_improve += 1
+
             if epoch % PRINT_EVERY == 0 or epoch == 0 or epoch == EPOCHS - 1:
                 print(
                     f"| epoch {epoch:3d} | time {np.sum(np.array(train_time)[-PRINT_EVERY:]):.2f}s "
                     f"| lr {scheduler.get_last_lr()[0]:.2e} "
                     f"| loss {train_loss_mean:.2e} | val loss {val_loss_mean:.2e} |"
+                    + (f" no_improve={no_improve}/{PATIENCE}" if epoch >= WARMUP_EPOCHS else "")
                 )
+
+            if epoch >= WARMUP_EPOCHS and no_improve >= PATIENCE:
+                print(f"Early stopping at epoch {epoch} "
+                      f"(val loss no improvement for {PATIENCE} epochs, "
+                      f"best={best_val_loss:.2e})")
+                break
+
+        # Restore best weights
+        if best_state is not None:
+            vf.load_state_dict(best_state)
 
         self.vf = vf
 

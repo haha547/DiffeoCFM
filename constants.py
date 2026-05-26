@@ -60,7 +60,7 @@ if DEBUG:
     N_SPLITS = 2
     WARMUP_EPOCHS = 5
 else:
-    N_JOBS = -1
+    N_JOBS = 1
     N_SPLITS = 10 if EXPE == "fmri" else 5
     WARMUP_EPOCHS = 10
 
