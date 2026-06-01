@@ -90,7 +90,7 @@ print(f"Using {DEVICE}.")
 
 EPOCHS        = 10   if DEBUG else 2000
 N_SPLITS      = 2    if DEBUG else 10
-N_JOBS        = 1    if DEBUG else -1
+N_JOBS        = 1    if DEBUG else (1 if DEVICE == "cuda" else -1)
 WARMUP_EPOCHS = 5    if DEBUG else 10
 
 CONFIG_FM = {
