@@ -36,7 +36,7 @@ PATH_FIGURES = Path("figures")
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", nargs="+", required=True,
                     help="Same folder(s) as train_custom.py --data")
-parser.add_argument("--region", type=str, default="p", choices=["p", "s"])
+parser.add_argument("--region", type=str, default="s", choices=["p", "s"])
 parser.add_argument("--jobs", type=int, default=4)
 parser.add_argument("--groupinfo", type=str, default="GroupInfo.mat")
 args = parser.parse_args()

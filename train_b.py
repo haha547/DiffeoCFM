@@ -8,7 +8,7 @@ One model learns the joint distribution across all four groups.
 Generated samples can be decoded back to ASD/TD and EC/CPT.
 
 Usage:
-    python train_b.py --data "./cov_2s_0ov" --region p
+    python train_b.py --data "./cov_2s_0ov" --region s
     python train_b.py --data "./cov_2s_0ov" --region s --debug
 """
 
@@ -24,7 +24,7 @@ import scipy.io
 import torch
 from scipy.spatial.distance import mahalanobis
 from sklearn.covariance import OAS
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import LeaveOneGroupOut
 
 from fm import DiffeoCFM
 
@@ -35,7 +35,7 @@ from fm import DiffeoCFM
 parser = argparse.ArgumentParser()
 parser.add_argument("--data",      type=str, required=True,
                     help="Folder containing G##_EC_p.npy / G##_CPT_s.npy etc.")
-parser.add_argument("--region",    type=str, default="p", choices=["p", "s"])
+parser.add_argument("--region",    type=str, default="s", choices=["p", "s"])
 parser.add_argument("--groupinfo", type=str, default="GroupInfo.mat")
 parser.add_argument("--debug",     action="store_true")
 args = parser.parse_args()
@@ -55,7 +55,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using {DEVICE}.")
 
 EPOCHS        = 10  if DEBUG else 2000
-N_SPLITS      = 2   if DEBUG else 10
 WARMUP_EPOCHS = 5   if DEBUG else 10
 
 CONFIG_FM = {
@@ -196,13 +195,14 @@ for method in METHODS:
 
     print(f"\nTraining {model_name} [{diffeo_name}] with 4-class conditioning ...")
 
-    rng    = np.random.RandomState(0)
-    ss     = GroupShuffleSplit(n_splits=N_SPLITS, random_state=rng, test_size=0.1)
-    splits = list(ss.split(X, y, groups=groups))
+    all_splits = list(LeaveOneGroupOut().split(X, y, groups=groups))
+    splits = all_splits[:2] if DEBUG else all_splits
+    print(f"  LOSO: {len(splits)} splits")
 
     # Sequential (no joblib) — required when using CUDA
     for split, (train_idx, val_idx) in enumerate(splits):
-        print(f"  Split {split + 1}/{N_SPLITS} ...")
+        print(f"  Split {split + 1}/{len(splits)}  "
+              f"(val subject: {groups[val_idx[0]]}) ...")
         run_split(
             split        = split,
             cov_train    = X[train_idx],

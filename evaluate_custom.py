@@ -32,9 +32,9 @@ PATH_FIGURES = Path("figures")
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", nargs="+", required=True,
                     help="Folder(s) containing covariance .npy files (same as train_custom.py --data)")
-parser.add_argument("--region", type=str, default="p", choices=["p", "s"],
-                    help="Which channel group: p=前8ch, s=後8ch (default: p)")
-parser.add_argument("--jobs", type=int, default=-1)
+parser.add_argument("--region", type=str, default="s", choices=["p", "s"],
+                    help="Which channel group: p=前8ch, s=後8ch (default: s)")
+parser.add_argument("--jobs", type=int, default=4)
 args = parser.parse_args()
 
 # Derive dataset names the same way train_custom.py does:
@@ -116,8 +116,8 @@ def evaluate_split(dataset, group, method, split, path_method):
     yg_train   = load("conditionals_generated_samples_train")
     gen_val    = load("covariances_generated_samples_val")
     yg_val     = load("conditionals_generated_samples_val")
-    train_time = float(load("training_time"))
-    samp_time  = float(load("sampling_time"))
+    train_time = float(load("training_time").flat[0])
+    samp_time  = float(load("sampling_time").flat[0])
 
     gen_train_last = gen_train[-1]  # final ODE step
     gen_val_last   = gen_val[-1]
