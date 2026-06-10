@@ -32,9 +32,15 @@
   → 正確做法：**跨 split 匯集預測分數，再整體計算指標**（見 Bug 修正 #1）
 
 ### 評估指標
-- **Baseline (Real→Val)**：真實訓練資料訓練分類器，測試真實 val
-- **TSTR (Gen→Val)**：生成資料訓練分類器，測試真實 val（最重要）
+- **Baseline (Real→Val)**：真實訓練資料訓練分類器，測試真實 val（AugFactor=0 標記）
+- **TSTR (Gen→Val)**：生成資料訓練分類器，測試真實 val（最重要，支援不同 aug 倍率）
 - 分類器：TangentSpace (Riemann) + LogisticRegressionCV
+
+### 增量生成（Augmentation）設計
+- 訓練時：`--max-aug N` 預先生成 N 倍 pool 存入磁碟（預設 5）
+- 評估時：`--aug k1 k2 ...` 從 pool 切片測試不同倍率，不需重新訓練
+- Pool 結構：`[y[0]]*max_aug, [y[1]]*max_aug, ...`，取前 k 個即 k 倍資料
+- 輸出 CSV 含 `AugFactor` 欄位，供 `plot_aug.py` 繪製趨勢圖
 
 ### 生成模型
 | 方法 | Diffeomorphism | 說明 |
@@ -112,10 +118,48 @@ LOSO 每次 val 只有 1 位 subject，該 subject 只有 TD 或 ASD（單一 cl
 
 ---
 
+### 2026-06-10 — 增量生成（Augmentation Factor）支援
+
+**需求：** 測試生成更多樣本是否能提升 TSTR 分類效果，且不需重複跑訓練。
+
+**設計決策：**
+- 生成在評估時做（不是訓練時），因為模型本身是隨機生成器，同一 y 標籤每次 sample() 結果不同
+- 但模型本身訓練後不存檔，所以改成**訓練時一次生成大 pool**，評估時切片
+
+**修改的檔案：**
+
+| 檔案 | 修改內容 |
+|------|---------|
+| `train_b.py` | `--aug` 改為 `--max-aug`；run_split 生成 N×max_aug pool；存 `aug_factor_max.npy` |
+| `train_custom.py` | 同上 |
+| `evaluate_b.py` | 新增 `--aug k1 k2 ...`；evaluate_split 加 pool 切片邏輯；aggregate 加 AugFactor 維度 |
+| `evaluate_a.py` | 同上（加 `--aug` 參數） |
+| `run_all.sh` | 新增 `--max-aug`、`--aug` 參數；預設 MAX_AUG=5, AUG_TEST="1 2 3 5" |
+| `plot_aug.py` | **新增**：畫 TSTR ROC-AUC / F1 vs AugFactor 趨勢圖 |
+
+**使用流程：**
+```bash
+# 訓練（一次，生成 5 倍 pool）
+python train_b.py --data "./cov_2s_0ov" --max-aug 5
+
+# 評估（不需重新訓練，測試不同倍率）
+python evaluate_b.py --data "./cov_2s_0ov" --aug 1 2 3 5
+
+# 畫趨勢圖
+python plot_aug.py
+```
+
+**`run_all.sh` 自訂：**
+```bash
+./run_all.sh --max-aug 10 --aug "1 3 5 10"
+```
+
+---
+
 ## 待辦事項 / 下一步
 
-- [ ] 在 Linux 主機上實際執行 `train_b.py` 並驗證輸出
-- [ ] 執行 `evaluate_b.py` 確認 bug 已修正
-- [ ] 執行 `plot_asd.py` 產生結果圖
-- [ ] 比較 Direction A vs B 在各 dataset 的 TSTR F1
+- [ ] 在 Linux 主機上執行 `train_b.py --max-aug 5` 並驗證 pool 正確存檔
+- [ ] 執行 `evaluate_b.py --aug 1 2 3 5` 確認 LOSO bug 已修正且 AugFactor 欄位正確
+- [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢
+- [ ] 執行 `plot_asd.py` 比較 Direction A vs B 的結果
 - [ ] 確認 `availability` 欄位是否需要用來過濾缺失受測者

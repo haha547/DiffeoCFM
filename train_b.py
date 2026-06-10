@@ -168,8 +168,19 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
     training_time = time.time() - t0
 
     t0 = time.time()
-    y_train_aug = np.repeat(y_train, aug_factor)   # N → N×aug_factor labels
-    sol_train   = model.sample(y_train_aug)
+    # Generate pool by calling sample(y_train) aug_factor times to avoid GPU OOM.
+    # Each call processes only N samples; results are stacked into (T, N*aug, 8, 8)
+    # with np.repeat ordering so evaluate_b.py pool-slicing stays correct.
+    if aug_factor > 1:
+        sol_parts = [model.sample(y_train) for _ in range(aug_factor)]
+        T_steps = sol_parts[0].shape[0]
+        N_tr    = sol_parts[0].shape[1]
+        extra   = sol_parts[0].shape[2:]
+        sol_train = (np.stack(sol_parts, axis=2)
+                     .reshape(T_steps, N_tr * aug_factor, *extra))
+    else:
+        sol_train = model.sample(y_train)
+    y_train_aug = np.repeat(y_train, aug_factor)   # (N×aug_factor,) labels
     sol_val     = model.sample(y_val)              # val stays 1:1
     sampling_time = time.time() - t0
 

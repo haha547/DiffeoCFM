@@ -40,8 +40,18 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
     training_time = time.time() - training_start
 
     sampling_start = time.time()
+    # Loop aug_factor times to avoid GPU OOM; stack into (T, N*aug, 8, 8)
+    # with np.repeat ordering so evaluate_a.py pool-slicing stays correct.
+    if aug_factor > 1:
+        sol_parts = [model.sample(y_train) for _ in range(aug_factor)]
+        T_steps = sol_parts[0].shape[0]
+        N_tr    = sol_parts[0].shape[1]
+        extra   = sol_parts[0].shape[2:]
+        sol_train = (np.stack(sol_parts, axis=2)
+                     .reshape(T_steps, N_tr * aug_factor, *extra))
+    else:
+        sol_train = model.sample(y_train)
     y_train_aug = np.repeat(y_train, aug_factor)
-    sol_train   = model.sample(y_train_aug)
     sol_val     = model.sample(y_val)
     sampling_time = time.time() - sampling_start
 
