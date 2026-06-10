@@ -1,21 +1,26 @@
 """
-evaluate_a.py  —  Direction A
-------------------------------
+evaluate_a.py  —  Direction A  (LOSO aggregation)
+--------------------------------------------------
 Evaluate ASD/TD classification using generated EC or CPT covariances.
 
-Uses results from train_custom.py (model conditioned on EC/CPT).
-Maps subject groups → ASD/TD labels via GroupInfo.mat, then runs
-TSTR / baseline / TRTS for ASD vs TD downstream classification.
+LOSO structure means each val set contains exactly ONE subject (single class).
+Per-split classification metrics are therefore undefined.
 
-Key question: does generated EC or CPT data help more for ASD/TD classification?
+Correct approach (implemented here):
+  - Each split: train classifier, record P(ASD) score for the left-out subject.
+  - After ALL splits: aggregate (y_true, y_score) across subjects → compute metrics.
+
+Uses results from train_custom.py (model conditioned on EC/CPT).
+Maps subject groups → ASD/TD labels via GroupInfo.mat.
 
 Usage:
-    python evaluate_a.py --data "./cov_2s_0ov" --region p
+    python evaluate_a.py --data "./cov_2s_0ov" --region s
     python evaluate_a.py --data "./cov_2s_0ov" "./cov_4s_0ov" --region s
 """
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -36,25 +41,26 @@ PATH_FIGURES = Path("figures")
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", nargs="+", required=True,
                     help="Same folder(s) as train_custom.py --data")
-parser.add_argument("--region", type=str, default="s", choices=["p", "s"])
-parser.add_argument("--jobs", type=int, default=4)
+parser.add_argument("--region",    type=str, default="s", choices=["p", "s"])
+parser.add_argument("--aug",       type=int, nargs="+", default=[1],
+                    help="Augmentation factor(s) to evaluate (default: 1). "
+                         "Must be ≤ --max-aug used during training.")
+parser.add_argument("--jobs",      type=int, default=1)
 parser.add_argument("--groupinfo", type=str, default="GroupInfo.mat")
 args = parser.parse_args()
 
-REGION     = args.region
-DATASETS   = [f"{Path(d).name}_{REGION}" for d in args.data]
-N_JOBS     = args.jobs
-REGION_ROW = 0 if REGION == "p" else 1
+REGION      = args.region
+DATASETS    = [f"{Path(d).name}_{REGION}" for d in args.data]
+AUG_FACTORS = sorted(set(args.aug))
+N_JOBS      = args.jobs
+REGION_ROW  = 0 if REGION == "p" else 1
 
-# =============================================================================
 # Load subject-level ASD/TD labels
-# =============================================================================
 g_info = scipy.io.loadmat(args.groupinfo)
-# condiction: (2, 43)  row0=p, row1=s  |  0=TD, 1=ASD
 subject_diagnosis = g_info["GroupInfo"][0, 0]["condiction"][REGION_ROW, :]  # (43,)
 print(f"Region '{REGION}': "
       f"{int(np.sum(subject_diagnosis == 1))} ASD, "
-      f"{int(np.sum(subject_diagnosis == 0))} TD subjects loaded.")
+      f"{int(np.sum(subject_diagnosis == 0))} TD subjects.")
 
 
 # =============================================================================
@@ -73,17 +79,20 @@ def project_on_SPD(matrices, eps=1e-8):
 
 
 def is_all_spd(matrices, tol=1e-12):
-    sym = all(np.allclose(m, m.T, atol=tol) for m in matrices)
-    pd  = all(np.all(np.linalg.eigvalsh(m) > tol) for m in matrices)
-    return sym and pd
+    return (all(np.allclose(m, m.T, atol=tol) for m in matrices) and
+            all(np.all(np.linalg.eigvalsh(m) > tol) for m in matrices))
 
 
-def clf_metrics(X_train, y_train, X_test, y_test):
-    """Returns dict of metrics, or None if not enough class diversity."""
-    if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
+def score_subject(X_train, y_train, X_val):
+    """
+    Train TangentSpace + LR on (X_train, y_train).
+    Return mean P(ASD) over all val trials, or None on failure.
+    """
+    if len(np.unique(y_train)) < 2:
         return None
+    n_min = int(np.min(np.bincount(y_train)))
     clf = LogisticRegressionCV(
-        cv=min(5, int(np.min(np.bincount(y_train)))),
+        cv=min(5, n_min),
         solver="liblinear",
         class_weight="balanced",
         random_state=42,
@@ -92,59 +101,53 @@ def clf_metrics(X_train, y_train, X_test, y_test):
     pipe = make_pipeline(TangentSpace(metric="riemann"), clf)
     try:
         pipe.fit(X_train, y_train)
-        y_pred  = pipe.predict(X_test)
-        y_score = pipe.predict_proba(X_test)[:, 1]
-        return {
-            "ROC-AUC":   roc_auc_score(y_test, y_score),
-            "F1":        f1_score(y_test, y_pred, zero_division=0),
-            "Precision": precision_score(y_test, y_pred, zero_division=0),
-            "Recall":    recall_score(y_test, y_pred, zero_division=0),
-        }
+        scores = pipe.predict_proba(X_val)[:, 1]   # P(ASD) per trial
+        return float(scores.mean())
     except Exception as e:
-        print(f"    clf failed: {e}")
+        print(f"    score_subject failed: {e}")
         return None
 
 
 # =============================================================================
-# Per-split evaluation
+# Per-split: return per-subject prediction rows
 # =============================================================================
 def evaluate_split(dataset, group, method, split, path_method):
+    """
+    Returns one row per (condition, comparison) with y_true and y_score
+    for the single left-out subject. Metrics are computed later by aggregation.
+    """
     def load(name):
         return np.load(path_method / f"split_{split}_{name}.npy", allow_pickle=False)
 
-    cov_train  = load("covariances_train")          # (N, 8, 8)
-    ec_cpt_tr  = load("conditionals_train")         # (N,) 0=EC, 1=CPT
-    groups_tr  = load("groups_train")               # (N,) subject index 0-based
-
+    cov_train  = load("covariances_train")
+    ec_cpt_tr  = load("conditionals_train")   # 0=EC, 1=CPT
+    groups_tr  = load("groups_train")
     cov_val    = load("covariances_val")
     ec_cpt_va  = load("conditionals_val")
     groups_va  = load("groups_val")
-
-    gen_train  = load("covariances_generated_samples_train")  # (T, N, 8, 8)
-    gen_val    = load("covariances_generated_samples_val")
-
+    gen_train  = load("covariances_generated_samples_train")
     train_time = float(load("training_time").flat[0])
     samp_time  = float(load("sampling_time").flat[0])
 
     # Map subject index → ASD/TD
-    diag_tr = subject_diagnosis[groups_tr]   # (N,) 0=TD 1=ASD
-    diag_va = subject_diagnosis[groups_va]
+    diag_tr = subject_diagnosis[groups_tr]   # (N,)
+    diag_va = subject_diagnosis[groups_va]   # (N_val,)
 
-    # Final ODE step
+    # LOSO: all val trials belong to the same subject and same diagnosis
+    subject_id  = int(groups_va[0])
+    y_true_subj = int(diag_va[0])
+
     gen_tr_last = gen_train[-1]
-    gen_va_last = gen_val[-1]
-
     if not is_all_spd(gen_tr_last):
         gen_tr_last = project_on_SPD(gen_tr_last)
-        gen_va_last = project_on_SPD(gen_va_last)
 
     rows = []
     base = {
-        "Dataset": dataset, "Group": group, "Method": method, "Split": split,
+        "Dataset": dataset, "Group": group, "Method": method,
+        "Split": split, "Subject": subject_id, "y_true": y_true_subj,
         "Train time (s)": train_time, "Sampling time (s)": samp_time,
     }
 
-    # Evaluate for each condition subset and "All"
     for cond_name, cond_val in [("EC", 0), ("CPT", 1), ("All", None)]:
         if cond_val is not None:
             tr_m = ec_cpt_tr == cond_val
@@ -153,24 +156,55 @@ def evaluate_split(dataset, group, method, split, path_method):
             tr_m = np.ones(len(cov_train), dtype=bool)
             va_m = np.ones(len(cov_val),   dtype=bool)
 
-        X_real_tr = cov_train[tr_m];   y_tr = diag_tr[tr_m]
+        if va_m.sum() == 0:
+            continue
+
+        X_real_tr = cov_train[tr_m];    y_tr    = diag_tr[tr_m]
         X_gen_tr  = gen_tr_last[tr_m]
-        X_real_va = cov_val[va_m];     y_va = diag_va[va_m]
-        X_gen_va  = gen_va_last[va_m]
+        X_real_va = cov_val[va_m]
 
-        for comparison, X_tr, y_train_c, X_va, y_val_c in [
-            ("Real→Val (baseline)", X_real_tr, y_tr, X_real_va, y_va),
-            ("Gen→Val (TSTR)",      X_gen_tr,  y_tr, X_real_va, y_va),
-            ("Real→Gen (TRTS)",     X_real_tr, y_tr, X_gen_va,  y_va),
+        for comparison, X_tr_use, y_tr_use in [
+            ("Baseline (Real→Val)", X_real_tr, y_tr),
+            ("TSTR (Gen→Val)",      X_gen_tr,  y_tr),
         ]:
-            m = clf_metrics(X_tr, y_train_c, X_va, y_val_c)
-            if m is not None:
+            s = score_subject(X_tr_use, y_tr_use, X_real_va)
+            if s is not None:
                 rows.append({**base, "Condition": cond_name,
-                             "Comparison": comparison, **m})
+                             "Comparison": comparison, "y_score": s})
 
-    print(f"  [{dataset}/{method}] split {split} done  "
-          f"(ASD in val: {int(np.sum(diag_va == 1))})")
+    print(f"  [{dataset}/{method}] split {split} — "
+          f"subject {subject_id} ({'ASD' if y_true_subj else 'TD '}), "
+          f"{len(rows)} prediction(s)")
     return rows
+
+
+# =============================================================================
+# Aggregate: compute metrics across all left-out subjects
+# =============================================================================
+def aggregate_predictions(df_pred: pd.DataFrame) -> pd.DataFrame:
+    group_cols = ["Dataset", "Method", "Condition", "Comparison"]
+    agg_rows = []
+
+    for keys, g in df_pred.groupby(group_cols):
+        if len(g["y_true"].unique()) < 2:
+            print(f"  SKIP {keys}: only one class in aggregated labels "
+                  f"({len(g)} subjects)")
+            continue
+
+        roc = roc_auc_score(g["y_true"], g["y_score"])
+        y_pred = (g["y_score"] >= 0.5).astype(int)
+        agg_rows.append({
+            **dict(zip(group_cols, keys)),
+            "N_subjects":        len(g),
+            "ROC-AUC":           roc,
+            "F1":                f1_score(g["y_true"], y_pred, zero_division=0),
+            "Precision":         precision_score(g["y_true"], y_pred, zero_division=0),
+            "Recall":            recall_score(g["y_true"], y_pred, zero_division=0),
+            "Train time (s)":    g["Train time (s)"].mean(),
+            "Sampling time (s)": g["Sampling time (s)"].mean(),
+        })
+
+    return pd.DataFrame(agg_rows)
 
 
 # =============================================================================
@@ -196,26 +230,44 @@ if __name__ == "__main__":
                     tasks.append((dataset, group_dir.name, method_dir.name,
                                   split, method_dir))
 
-    print(f"Found {len(tasks)} split(s) to evaluate across: {DATASETS}")
+    if not tasks:
+        print("No result files found — check that train_custom.py has been run.")
+        sys.exit(1)
+
+    print(f"Found {len(tasks)} split(s) across: {DATASETS}")
 
     results = Parallel(n_jobs=N_JOBS)(
         delayed(evaluate_split)(ds, grp, mth, sp, path)
         for ds, grp, mth, sp, path in tasks
     )
 
-    all_rows = [r for rows in results for r in rows]
-    if not all_rows:
-        print("No results collected — check that training has been run.")
-        raise SystemExit(1)
+    all_pred = [r for rows in results for r in rows]
+    if not all_pred:
+        print("No predictions collected — all splits may have skipped.")
+        sys.exit(1)
 
-    df = pd.DataFrame(all_rows)
+    df_pred = pd.DataFrame(all_pred)
+
+    raw_csv = PATH_FIGURES / "asd_predictions_a.csv"
+    df_pred.to_csv(raw_csv, index=False, float_format="%.4f")
+    print(f"Raw predictions → {raw_csv}  ({len(df_pred)} rows)")
+
+    df_agg = aggregate_predictions(df_pred)
+    if df_agg.empty:
+        print("Aggregation produced no rows — check class balance across splits.")
+        sys.exit(1)
+
     out_csv = PATH_FIGURES / "asd_classification_a.csv"
-    df.to_csv(out_csv, index=False, float_format="%.3f")
+    df_agg.to_csv(out_csv, index=False, float_format="%.3f")
     print(f"\nSaved → {out_csv}")
 
-    tstr = df[df["Comparison"] == "Gen→Val (TSTR)"]
-    if not tstr.empty:
-        summary = (tstr.groupby(["Dataset", "Method", "Condition"])["F1"]
-                   .agg(["mean", "std"]).round(3))
-        print("\nF1 summary — TSTR (train on generated, test on real ASD/TD):")
+    baseline = df_agg[df_agg["Comparison"] == "Baseline (Real→Val)"]
+    tstr     = df_agg[df_agg["Comparison"] == "TSTR (Gen→Val)"]
+
+    for label, sub in [("Baseline", baseline), ("TSTR", tstr)]:
+        if sub.empty:
+            continue
+        summary = (sub.groupby(["Dataset", "Method", "Condition"])
+                   [["ROC-AUC", "F1"]].mean().round(3))
+        print(f"\n{label}:")
         print(summary.to_string())

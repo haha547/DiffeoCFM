@@ -27,7 +27,8 @@ from gaussian import DiffeoGauss
 
 # Inlined from train.py to avoid importing constants.py (which runs argparse)
 def run_split(split, cov_train, cov_val, y_train, y_val,
-              groups_train, groups_val, model, path_results):
+              groups_train, groups_val, model, path_results,
+              aug_factor: int = 1):
     assert set(groups_train).isdisjoint(set(groups_val)), \
         "Groups are not disjoint between train and val sets."
 
@@ -39,8 +40,9 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
     training_time = time.time() - training_start
 
     sampling_start = time.time()
-    sol_train = model.sample(y_train)
-    sol_val   = model.sample(y_val)
+    y_train_aug = np.repeat(y_train, aug_factor)
+    sol_train   = model.sample(y_train_aug)
+    sol_val     = model.sample(y_val)
     sampling_time = time.time() - sampling_start
 
     def save(name, arr):
@@ -57,11 +59,12 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
     save("conditionals_val",   y_val)
     save("groups_val",         groups_val)
     save("covariances_generated_samples_train", sol_train)
-    save("conditionals_generated_samples_train", y_train)
+    save("conditionals_generated_samples_train", y_train_aug)
     save("covariances_generated_samples_val",   sol_val)
     save("conditionals_generated_samples_val",  y_val)
-    save("training_time", np.array([training_time]))
-    save("sampling_time", np.array([sampling_time]))
+    save("training_time",   np.array([training_time]))
+    save("sampling_time",   np.array([sampling_time]))
+    save("aug_factor_max",  np.array([aug_factor]))
 
 # =============================================================================
 # Args
@@ -71,12 +74,16 @@ parser.add_argument("--data",   type=str, required=True,
                     help="Folder containing G##_EC_p.npy / G##_CPT_s.npy etc.")
 parser.add_argument("--region", type=str, default="s", choices=["p", "s"],
                     help="Which channel group: p=前8ch, s=後8ch (default: s)")
+parser.add_argument("--max-aug", type=int, default=1, dest="max_aug",
+                    help="Pool size: generate this many synthetic samples per real "
+                         "training sample and save all of them (default 1).")
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
-DATA_DIR = Path(args.data)
-REGION   = args.region
-DEBUG    = args.debug
+DATA_DIR   = Path(args.data)
+REGION     = args.region
+DEBUG      = args.debug
+MAX_AUG    = args.max_aug
 
 # =============================================================================
 # Fixed settings (EEG-style, non-normalized SPD)
@@ -199,6 +206,7 @@ for method in METHODS:
             groups_val   = groups[val_idx],
             model        = model,
             path_results = out_dir,
+            aug_factor   = MAX_AUG,
         )
 
     print(f"  Done. Results → {out_dir}")

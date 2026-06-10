@@ -37,12 +37,17 @@ parser.add_argument("--data",      type=str, required=True,
                     help="Folder containing G##_EC_p.npy / G##_CPT_s.npy etc.")
 parser.add_argument("--region",    type=str, default="s", choices=["p", "s"])
 parser.add_argument("--groupinfo", type=str, default="GroupInfo.mat")
+parser.add_argument("--max-aug",   type=int, default=1, dest="max_aug",
+                    help="Pool size: generate this many synthetic samples per real "
+                         "training sample and save all of them (default 1). "
+                         "Use --aug in evaluate_b.py to test different sub-sizes.")
 parser.add_argument("--debug",     action="store_true")
 args = parser.parse_args()
 
 DATA_DIR   = Path(args.data)
 REGION     = args.region
 DEBUG      = args.debug
+MAX_AUG    = args.max_aug
 REGION_ROW = 0 if REGION == "p" else 1
 
 # =============================================================================
@@ -146,7 +151,15 @@ print(f"  After filtering: {len(X)} samples  (removed {mask.size - mask.sum()})"
 # run_split
 # =============================================================================
 def run_split(split, cov_train, cov_val, y_train, y_val,
-              groups_train, groups_val, model, path_results):
+              groups_train, groups_val, model, path_results,
+              aug_factor: int = 1):
+    """
+    aug_factor: how many synthetic samples to generate per real training sample.
+      1 → same size as real data (default, 1:1)
+      3 → 3× real data size (e.g. 1 real → 3 generated)
+    Each call to model.sample() draws a fresh random prior point, so
+    repeating y_train k times naturally yields k diverse samples per label.
+    """
     assert set(groups_train).isdisjoint(set(groups_val)), \
         "Groups are not disjoint between train and val sets."
 
@@ -155,8 +168,9 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
     training_time = time.time() - t0
 
     t0 = time.time()
-    sol_train = model.sample(y_train)
-    sol_val   = model.sample(y_val)
+    y_train_aug = np.repeat(y_train, aug_factor)   # N → N×aug_factor labels
+    sol_train   = model.sample(y_train_aug)
+    sol_val     = model.sample(y_val)              # val stays 1:1
     sampling_time = time.time() - t0
 
     def save(name, arr):
@@ -167,17 +181,18 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
         save("val_losses",   train_info["val_loss"])
 
     save("covariances_train",                    cov_train)
-    save("conditionals_train",                   y_train)   # 4-class
+    save("conditionals_train",                   y_train)        # original (N,)
     save("groups_train",                         groups_train)
     save("covariances_val",                      cov_val)
     save("conditionals_val",                     y_val)
     save("groups_val",                           groups_val)
     save("covariances_generated_samples_train",  sol_train)
-    save("conditionals_generated_samples_train", y_train)
+    save("conditionals_generated_samples_train", y_train_aug)    # (N×aug_factor,)
     save("covariances_generated_samples_val",    sol_val)
     save("conditionals_generated_samples_val",   y_val)
     save("training_time",                        np.array([training_time]))
     save("sampling_time",                        np.array([sampling_time]))
+    save("aug_factor_max",                       np.array([aug_factor]))
 
 
 # =============================================================================
@@ -213,6 +228,7 @@ for method in METHODS:
             groups_val   = groups[val_idx],
             model        = model,
             path_results = out_dir,
+            aug_factor   = MAX_AUG,
         )
 
     # Free GPU memory before next method
