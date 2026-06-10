@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from pyriemann.tangentspace import TangentSpace
-from sklearn.linear_model import LogisticRegressionCV
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.pipeline import make_pipeline
 
@@ -96,13 +96,12 @@ def score_subject(X_train, y_train, X_val):
     """
     if len(np.unique(y_train)) < 2:
         return None
-    n_min = int(np.min(np.bincount(y_train)))
-    clf = LogisticRegressionCV(
-        cv=min(5, n_min),
+    clf = LogisticRegression(
+        C=1.0,
         solver="liblinear",
         class_weight="balanced",
         random_state=42,
-        max_iter=5000,
+        max_iter=1000,
     )
     pipe = make_pipeline(TangentSpace(metric="riemann"), clf)
     try:
