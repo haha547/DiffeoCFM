@@ -73,19 +73,21 @@ print(f"Methods: {list(METHODS)}")
 # =============================================================================
 # Helpers
 # =============================================================================
-def project_on_SPD(matrices, eps=1e-8):
-    orig = matrices.shape
-    flat = matrices.reshape(-1, orig[-2], orig[-1])
+def ensure_spd(matrices, eps=1e-6):
+    """Always apply a small regularization to guarantee positive definiteness.
+    eps=1e-6 is large enough for Riemannian ops (TangentSpace), small enough
+    not to distort the data. Fusion ops (esp. matrix_product) can amplify
+    condition numbers, so unconditional regularization is safer than checking.
+    """
+    orig  = matrices.shape
+    flat  = matrices.reshape(-1, orig[-2], orig[-1])
+    # symmetrize (guards against tiny numerical asymmetry from fusion)
+    flat  = (flat + flat.transpose(0, 2, 1)) * 0.5
     eigs  = np.linalg.eigvalsh(flat).min(axis=1)
     alpha = np.where(eigs < eps, (eps - eigs) / (1 - eigs), 0.0)
     eye   = np.eye(orig[-1])[None]
     out   = (1 - alpha)[:, None, None] * flat + alpha[:, None, None] * eye
     return out.reshape(orig)
-
-
-def is_all_spd(matrices, tol=1e-12):
-    return (all(np.allclose(m, m.T, atol=tol) for m in matrices) and
-            all(np.all(np.linalg.eigvalsh(m) > tol) for m in matrices))
 
 
 def score_subject(X_train, y_train, X_val):
@@ -110,40 +112,63 @@ def score_subject(X_train, y_train, X_val):
 # =============================================================================
 def load_fused(data_dir: Path, fusion_fn) -> tuple:
     """
-    Load paired P+S covariances, fuse trial-by-trial.
+    Load paired P+S covariances (and optionally the inter block), fuse trial-by-trial.
     Returns (X_fused, y_cond, groups) or (None, None, None) if no data.
     y_cond: 0=EC, 1=CPT
     groups: 0-indexed subject index
+
+    The inter block (G##_<cond>_inter.npy) is loaded when present and passed to
+    fusion_fn as the keyword argument `inter`.  Methods that do not need it
+    (arith_mean, s_only, …) declare `inter=None` and ignore it.
+    Methods that require it (inter_gram) raise ValueError if inter=None, which
+    causes that subject to be skipped with a warning.
     """
     all_X, all_cond, all_groups = [], [], []
+    n_skipped_inter = 0
 
     for cond_name, cond_idx in [("EC", 0), ("CPT", 1)]:
         for fp_p in sorted(data_dir.glob(f"G*_{cond_name}_p.npy")):
             sub_str = fp_p.stem.split("_")[0]          # "G03"
             sub_idx = int(sub_str[1:]) - 1              # 0-indexed
 
-            fp_s = fp_p.parent / f"{sub_str}_{cond_name}_s.npy"
+            fp_s     = fp_p.parent / f"{sub_str}_{cond_name}_s.npy"
+            fp_inter = fp_p.parent / f"{sub_str}_{cond_name}_inter.npy"
+
             if not fp_s.exists():
                 print(f"    SKIP {sub_str} {cond_name}: missing {fp_s.name}")
                 continue
 
-            P = np.load(fp_p)   # (n_trials, 8, 8)
+            P = np.load(fp_p)                                # (n_trials, 8, 8)
             S = np.load(fp_s)
+            inter = np.load(fp_inter) if fp_inter.exists() else None
 
             if len(P) != len(S):
                 n = min(len(P), len(S))
                 print(f"    WARN {sub_str} {cond_name}: trial count mismatch "
                       f"(P={len(P)}, S={len(S)}), truncating to {n}")
                 P, S = P[:n], S[:n]
+                if inter is not None:
+                    inter = inter[:n]
 
             if sub_idx < len(subject_available) and not subject_available[sub_idx]:
                 continue   # skip subjects missing any of the 3 availability entries
 
-            fused = fusion_fn(P, S)   # (n_trials, 8, 8)
+            try:
+                fused_raw = fusion_fn(P, S, inter=inter)
+            except (TypeError, ValueError) as e:
+                # inter_gram will raise ValueError if inter=None (file not found)
+                n_skipped_inter += 1
+                if n_skipped_inter == 1:
+                    print(f"    SKIP {sub_str} {cond_name}: {e}")
+                continue
+
+            fused = ensure_spd(fused_raw)                    # (n_trials, 8, 8)
             all_X.append(fused)
             all_cond.append(np.full(len(fused), cond_idx, dtype=np.int64))
             all_groups.append(np.full(len(fused), sub_idx, dtype=np.int64))
 
+    if n_skipped_inter > 1:
+        print(f"    ... ({n_skipped_inter} subjects skipped — inter block files missing)")
     if not all_X:
         return None, None, None
     return (np.concatenate(all_X),
@@ -162,9 +187,6 @@ def evaluate_one(dataset: str, data_dir: Path,
     if X is None:
         print(f"    No paired P+S data found in {data_dir}")
         return []
-
-    if not is_all_spd(X):
-        X = project_on_SPD(X)
 
     diag = subject_diagnosis
     loso = LeaveOneGroupOut()

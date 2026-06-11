@@ -20,7 +20,9 @@ S(8ch) [  inter^T | S_intra ]   ← 右下: Secondary 自身協方差（intra）
 目前使用的 `.npy` 檔是從 16×16 矩陣中**預先提取**的 8×8 intra 區塊：
 - `G##_EC_p.npy` → 左上 8×8，Primary 受測者的 intra-brain 協方差
 - `G##_EC_s.npy` → 右下 8×8，Secondary 受測者的 intra-brain 協方差
-- 左下 8×8 inter-brain 區塊目前尚未使用（潛在的分類特徵）
+- `G##_EC_inter.npy` → 左下 8×8，P→S 跨腦 cross-covariance（**目前需要另行提取**）
+  - 非 SPD（非對稱），透過 `inter @ inter.T`（Gram matrix）轉為 SPD 後可直接使用
+  - 物理意義：inter-brain coupling 強度；較大特徵值代表較強的跨腦同步
 
 受測者族群（每個 G## 代表一對 Primary+Secondary）：
 - **S（Secondary）**：21 TD，22 ASD（接近平衡）→ 預設使用
@@ -247,15 +249,23 @@ gen_tr_last = gen_pool_last[idx_first]            # (N, 8, 8)
 
 **目前融合方法（`fuse.py`）：**
 
-| 方法名 | 公式 | 說明 |
-|--------|------|------|
-| `arith_mean` | (P + S) / 2 | 算術平均，最快，保 SPD |
-| `log_euclidean` | expm((logm(P) + logm(S)) / 2) | 幾何平均，符合 Riemannian 流形 |
-| `matrix_product` | P @ S @ P | 同餘變換，以 P 的座標系描述 S，保 SPD |
-| `p_only` | P | 基準：僅使用 P region |
-| `s_only` | S | 基準：僅使用 S region |
+| 方法名 | 公式 | 需要 inter.npy | 說明 |
+|--------|------|:-:|------|
+| `arith_mean` | (P + S) / 2 | 否 | 算術平均，最快，保 SPD |
+| `log_euclidean` | expm((logm(P)+logm(S)) / 2) | 否 | 幾何平均，符合 Riemannian 流形 |
+| `matrix_product` | P @ S @ P | 否 | 同餘變換，以 P 的座標系描述 S |
+| `s_only` | S | 否 | **主要基準**：僅用 Secondary intra-brain |
+| `inter_gram` | inter @ inter.T | **是** | **跨腦基準**：量化 inter-brain coupling |
+| `p_only` | P | 否 | 弱基準：Primary intra-brain（與 Secondary 診斷無直接關聯） |
 
-**新增方法：** 在 `fuse.py` 底部的 `FUSION_METHODS` 字典加入即可。
+**基準設計說明：**
+- `s_only` 是最重要的基準：fusion 有沒有比單純的 Secondary 協方差更好？
+- `inter_gram` 是有科學意義的替代基準：跨腦同步（inter-brain coupling）是否也能預測 ASD？
+  - inter block 本身非 SPD，透過 Gram matrix `inter @ inter.T` 轉為 SPD 後使用
+  - 需要先從 16×16 矩陣額外提取並儲存 `G##_*_inter.npy`（左下 8×8 區塊）
+- `p_only` 保留作完整性參考，但在科學解讀上意義有限
+
+**新增方法：** 在 `fuse.py` 底部的 `FUSION_METHODS` 字典加入即可（簽名：`f(P, S, inter=None)`）。
 
 **使用（腳本）：**
 ```bash
@@ -276,6 +286,38 @@ python evaluate_fusion.py --data "./cov_2s_0ov" "./cov_4s_0ov" --methods arith_m
 
 ---
 
+### 2026-06-12 — 修正 phase1_cov.py：聯合協方差 + normalize=True
+
+**問題：** `evaluate_fusion.py` 輸出 F1 / ROC-AUC 全部為 0 或 1，明顯異常。
+
+**根本原因 1：P 和 S 的 bad window 過濾不同步**
+
+舊版本對 `data_p`（channels 0-7）和 `data_s`（channels 8-15）分開呼叫 `compute_cov_matrices`。若 window t 只有 P 的某個 channel 有 NaN，則 P 跳過 t 而 S 保留 t。最終 `G##_p.npy[i]` 和 `G##_s.npy[i]` 不對應同一個時間窗，evaluate_fusion.py 的 trial-by-trial fusion 把錯誤的時間點配對。
+
+**根本原因 2：`normalize=False` 讓絕對 EEG 振幅進入協方差矩陣**
+
+OAS 協方差矩陣的 trace = EEG 總功率。若 ASD 和 TD 組的 EEG 振幅因記錄環境（電極阻抗、放大器增益、受測者動作）系統性不同，分類器直接靠總功率分開兩組，與神經科學無關，結果 AUC=1。
+
+**修正：改用聯合 16ch 協方差提取 block（`compute_joint_cov_matrices`）**
+
+新做法：對每個時間窗計算**完整 16×16 聯合協方差**，再提取三個 block：
+
+```
+cov16 = OAS().fit(seg.T).covariance_  # (16, 16)
+P_intra = cov16[:8, :8]    → G##_*_p.npy
+S_intra = cov16[8:, 8:]    → G##_*_s.npy
+inter   = cov16[8:, :8]    → G##_*_inter.npy  (bonus: 同時產生 inter block)
+```
+
+優點：
+- P、S、inter 保證來自完全相同的時間窗，不可能有 alignment 問題
+- 同時一次產生 inter block，不需要再跑一次
+- `normalize=True`：先對 16×16 做正規化（correlation matrix，對角線=1），再提取 block，移除絕對振幅影響
+
+**需要重新跑 phase1_cov.py** 以取得新的 .npy 檔案（舊的 alignment 有問題，結果不可靠）。
+
+---
+
 ## 待辦事項 / 下一步
 
 - [x] `./run_all.sh --debug` 可以正常執行
@@ -291,4 +333,6 @@ python evaluate_fusion.py --data "./cov_2s_0ov" "./cov_4s_0ov" --methods arith_m
 - [ ] 若融合有改善，考慮加入 DiffeoCFM 生成流程（train_fusion.py）
 - [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢（完整訓練後）
 - [ ] 論文用：統計證明 intra-brain 數值分布 >> inter-brain（算各 block 的均值/方差分布即可）
-- [ ] 評估是否將 inter-brain 區塊也納入分類特徵（目前未使用）
+- [ ] **重新跑 `phase1_cov.py`**（修正 alignment + normalize=True，同時產生 inter.npy）
+- [ ] 跑 `./run_fusion.sh --methods inter_gram` 測試跨腦同步是否可預測 ASD（需要 inter.npy）
+- [ ] 比較 inter_gram vs s_only：跨腦或個別 Secondary 哪個更具預測力？

@@ -7,22 +7,26 @@ The 16×16 joint covariance has blocks:
     [ inter^T       | S_intra ]
 P = Primary's intra-brain 8×8 block (G##_EC_p.npy)
 S = Secondary's intra-brain 8×8 block (G##_EC_s.npy)
+inter = off-diagonal cross-brain block (G##_EC_inter.npy)  ← optional
 Note: intra >> inter in magnitude (within-brain EEG correlates much more than cross-brain).
 
-All functions accept two (n, d, d) or (d, d) SPD matrix arrays
-and return a fused array of the same shape.
+All functions have the signature f(P, S, inter=None) and return an (n, d, d) or (d, d)
+array of the same leading shape as P.
 
 Registry:
     FUSION_METHODS : dict[str, callable]  —  name → function
 
 Usage:
     from fuse import FUSION_METHODS
-    fused = FUSION_METHODS["arith_mean"](P_batch, S_batch)   # (n, 8, 8)
+    fused = FUSION_METHODS["arith_mean"](P_batch, S_batch)       # (n, 8, 8)
+    fused = FUSION_METHODS["inter_gram"](P_batch, S_batch, inter) # requires inter.npy
 
 Adding a new method:
-    1. Define a function f(P, S) -> np.ndarray (same shape as P).
+    1. Define a function f(P, S, inter=None) -> np.ndarray (same shape as P).
     2. Add it to FUSION_METHODS at the bottom of this file.
 """
+
+import warnings
 
 import numpy as np
 from scipy.linalg import expm, logm
@@ -32,7 +36,7 @@ from scipy.linalg import expm, logm
 # Fusion methods
 # =============================================================================
 
-def arith_mean(P: np.ndarray, S: np.ndarray) -> np.ndarray:
+def arith_mean(P: np.ndarray, S: np.ndarray, inter=None) -> np.ndarray:
     """Arithmetic (Euclidean) mean: (P + S) / 2.
 
     Preserves SPD: convex combination of two PD matrices is PD.
@@ -41,7 +45,7 @@ def arith_mean(P: np.ndarray, S: np.ndarray) -> np.ndarray:
     return (P + S) * 0.5
 
 
-def log_euclidean_mean(P: np.ndarray, S: np.ndarray) -> np.ndarray:
+def log_euclidean_mean(P: np.ndarray, S: np.ndarray, inter=None) -> np.ndarray:
     """Log-Euclidean mean: expm((logm(P) + logm(S)) / 2).
 
     Geodesic midpoint under the log-Euclidean metric.
@@ -49,7 +53,10 @@ def log_euclidean_mean(P: np.ndarray, S: np.ndarray) -> np.ndarray:
     near-singular results). Slower due to per-trial matrix log/exp.
     """
     def _logm(X: np.ndarray) -> np.ndarray:
-        return logm(X).real
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning,
+                                    message="logm result may be inaccurate")
+            return logm(X).real
 
     def _expm(X: np.ndarray) -> np.ndarray:
         return expm(X).real
@@ -63,7 +70,7 @@ def log_euclidean_mean(P: np.ndarray, S: np.ndarray) -> np.ndarray:
     ])
 
 
-def matrix_product(P: np.ndarray, S: np.ndarray) -> np.ndarray:
+def matrix_product(P: np.ndarray, S: np.ndarray, inter=None) -> np.ndarray:
     """Congruence product: P @ S @ P.
 
     Maps S into the coordinate system defined by P.
@@ -77,14 +84,38 @@ def matrix_product(P: np.ndarray, S: np.ndarray) -> np.ndarray:
     return (P @ S) @ P   # batched: (n,d,d) @ (n,d,d) @ (n,d,d)
 
 
-def p_only(P: np.ndarray, S: np.ndarray) -> np.ndarray:
-    """Baseline: use P-region covariance only (ignore S)."""
+def p_only(P: np.ndarray, S: np.ndarray, inter=None) -> np.ndarray:
+    """Baseline: use Primary intra-brain covariance only (ignore S and inter)."""
     return P.copy()
 
 
-def s_only(P: np.ndarray, S: np.ndarray) -> np.ndarray:
-    """Baseline: use S-region covariance only (ignore P)."""
+def s_only(P: np.ndarray, S: np.ndarray, inter=None) -> np.ndarray:
+    """Baseline: use Secondary intra-brain covariance only (ignore P and inter)."""
     return S.copy()
+
+
+def inter_gram(P: np.ndarray, S: np.ndarray, inter: np.ndarray) -> np.ndarray:
+    """Inter-brain Gram matrix: inter @ inter.T.
+
+    The raw inter block (8×8) is a cross-covariance between Primary and
+    Secondary channels — not symmetric, not SPD.  The Gram matrix inter @ inter.T
+    is always PSD (made SPD by ensure_spd in the evaluation loop) and captures
+    inter-brain coupling strength: larger eigenvalues mean more synchrony.
+
+    Requires G##_*_inter.npy files alongside _p.npy / _s.npy.
+    In the hyperscanning data the inter block is the bottom-left 8×8 of the
+    16×16 joint covariance (Primary rows × Secondary cols).
+    """
+    if inter is None:
+        raise ValueError(
+            "inter_gram requires the inter-brain block. "
+            "Save the bottom-left 8×8 of the 16×16 joint covariance "
+            "as G##_<cond>_inter.npy alongside the _p.npy / _s.npy files."
+        )
+    if inter.ndim == 2:
+        return inter @ inter.T
+    # batched: (n, 8, 8) @ (n, 8, 8)^T
+    return inter @ inter.transpose(0, 2, 1)
 
 
 # =============================================================================
@@ -95,6 +126,7 @@ FUSION_METHODS: dict[str, callable] = {
     "arith_mean":     arith_mean,
     "log_euclidean":  log_euclidean_mean,
     "matrix_product": matrix_product,
-    "p_only":         p_only,
     "s_only":         s_only,
+    "inter_gram":     inter_gram,   # inter-brain coupling baseline
+    "p_only":         p_only,       # included for completeness; scientifically weak
 }
