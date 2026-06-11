@@ -88,6 +88,30 @@ else
 fi
 
 # =============================================================================
+# Direction A_inter — inter_gram region (inter-brain coupling as ASD predictor)
+# =============================================================================
+echo ""
+echo "====== Direction A_inter: Training (train_custom.py --region inter_gram) ======"
+for ds in "${DATASETS[@]}"; do
+    echo "--- $ds ---"
+    if [ ! -d "./$ds" ]; then
+        echo "  WARNING: ./$ds not found, skipping."
+        continue
+    fi
+    "$PYTHON" train_custom.py --data "./$ds" --region inter_gram --max-aug "$MAX_AUG" $EXTRA_ARGS
+done
+
+echo ""
+echo "====== Direction A_inter: Evaluate ASD/TD (evaluate_a.py --region inter_gram) ======"
+if [ ${#DATA_ARGS[@]} -gt 0 ]; then
+    "$PYTHON" evaluate_a.py --data "${DATA_ARGS[@]}" \
+        --region inter_gram --aug $AUG_TEST || \
+        echo "  WARNING: evaluate_a.py (inter_gram) failed"
+else
+    echo "  No data found, skipping."
+fi
+
+# =============================================================================
 # Direction B — train with 4-class conditioning
 # =============================================================================
 echo ""

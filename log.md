@@ -38,15 +38,17 @@ S(8ch) [  inter^T | S_intra ]   ← 右下: Secondary 自身協方差（intra）
 - 每個 G## 代表一對受測者；`.npy` 檔案是從 16×16 矩陣提取的 8×8 intra 區塊
 - shape: `(n_trials, 8, 8)`
 
-### 兩條實驗路線
+### 三條實驗路線
 
-| | Direction A | Direction B |
-|--|--|--|
-| 訓練腳本 | `train_custom.py` | `train_b.py` |
-| 條件標籤 y | EC=0 / CPT=1 | TD-EC=0, TD-CPT=1, ASD-EC=2, ASD-CPT=3 |
-| 生成器知道診斷? | 否 | 是 |
-| 結果目錄 | `results/` | `results_b/` |
-| ASD/TD 評估腳本 | `evaluate_a.py` | `evaluate_b.py` |
+| | Direction A | Direction A_inter | Direction B |
+|--|--|--|--|
+| 訓練腳本 | `train_custom.py` | `train_custom.py --region inter_gram` | `train_b.py` |
+| 輸入協方差 | S_intra (8×8) | inter @ inter.T (8×8) | S_intra (8×8) |
+| 條件標籤 y | EC=0 / CPT=1 | EC=0 / CPT=1 | TD-EC=0…ASD-CPT=3 |
+| 生成器知道診斷? | 否 | 否 | 是 |
+| 結果目錄 | `results/` | `results/` (不同 dataset_name) | `results_b/` |
+| ASD/TD 評估腳本 | `evaluate_a.py` | `evaluate_a.py --region inter_gram` | `evaluate_b.py` |
+| 科學假設 | Secondary intra-brain 含 ASD 訊號 | 跨腦 coupling (inter_gram) 含 ASD 訊號 | 4-class 聯合標籤 |
 
 ### 評估策略（LOSO）
 - 外層：LeaveOneGroupOut（每次留一位 subject 作為 val）
@@ -274,6 +276,18 @@ gen_tr_last = gen_pool_last[idx_first]            # (N, 8, 8)
 ./run_fusion.sh --methods "arith_mean matrix_product"
 ```
 
+**inter_gram 加入 DiffeoCFM 訓練流程（2026-06-12）：**
+
+`run_all.sh` 新增 Direction A_inter：train_custom.py 以 `--region inter_gram` 對 inter-brain Gram matrix (`inter @ inter.T`) 進行 EC/CPT 條件訓練，evaluate_a.py 以 `--region inter_gram` 評估 ASD/TD 分類。
+
+```bash
+# 手動單獨跑 inter_gram
+python train_custom.py --data "./cov_2s_0ov" --region inter_gram --max-aug 5
+python evaluate_a.py --data "./cov_2s_0ov" --region inter_gram --aug 1 2 3 5
+# 或整合在 run_all.sh 中一起跑
+./run_all.sh
+```
+
 **使用（直接）：**
 ```bash
 python evaluate_fusion.py --data "./cov_2s_0ov"
@@ -325,14 +339,10 @@ inter   = cov16[8:, :8]    → G##_*_inter.npy  (bonus: 同時產生 inter block
 - [x] 建立 `run_fusion.sh`（執行 evaluate_fusion.py 的獨立腳本）
 - [x] Availability 過濾已實作（34 位有效 subjects）
 - [x] F1=0 / baseline=0.2 確認為 debug 模式正常現象
-- [ ] 重新以完整模式跑 `train_b.py` + `train_custom.py`（availability 過濾後結果會變）
-- [ ] 重新跑 `evaluate_a.py`（pool 切片 bug 已修正，現在可以產生 asd_classification_a.csv）
-- [ ] 跑 `plot_asd.py` 確認 Direction A vs B 可以正常畫圖
-- [ ] 跑 `evaluate_fusion.py --data ./cov_2s_0ov` 測試 P/S 融合分類效果
-- [ ] 比較融合方法 vs 單 region（p_only / s_only）的 ROC-AUC / F1
-- [ ] 若融合有改善，考慮加入 DiffeoCFM 生成流程（train_fusion.py）
-- [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢（完整訓練後）
+- [x] **`phase1_cov.py` 修正**（alignment + normalize=True + inter.npy 同時產生）
+- [x] `./run_fusion.sh` 完成，inter_gram > s_only ROC-AUC/F1
+- [ ] **重新跑 `./run_all.sh`**（現在包含 Direction A_inter；train_custom.py 支援 `--region inter_gram`）
+- [ ] 比較 Direction A_inter TSTR vs Direction A TSTR：生成的 inter_gram 是否比 s_only 更有助於分類？
+- [ ] 跑 `plot_asd.py` 確認 Direction A / A_inter / B 畫圖正常
+- [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢
 - [ ] 論文用：統計證明 intra-brain 數值分布 >> inter-brain（算各 block 的均值/方差分布即可）
-- [ ] **重新跑 `phase1_cov.py`**（修正 alignment + normalize=True，同時產生 inter.npy）
-- [ ] 跑 `./run_fusion.sh --methods inter_gram` 測試跨腦同步是否可預測 ASD（需要 inter.npy）
-- [ ] 比較 inter_gram vs s_only：跨腦或個別 Secondary 哪個更具預測力？

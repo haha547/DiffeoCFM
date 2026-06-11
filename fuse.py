@@ -33,6 +33,29 @@ from scipy.linalg import expm, logm
 
 
 # =============================================================================
+# SPD utility (used by fusion methods and callers)
+# =============================================================================
+
+def ensure_spd(matrices: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Unconditionally regularize matrices to be strictly SPD.
+
+    Symmetrizes and ensures minimum eigenvalue >= eps.
+    eps=1e-6 is large enough for Riemannian ops (TangentSpace), small enough
+    not to distort data.  Fusion ops (esp. matrix_product, inter_gram) can
+    amplify condition numbers, so unconditional regularization is safer than
+    conditional checking.
+    """
+    orig  = matrices.shape
+    flat  = matrices.reshape(-1, orig[-2], orig[-1])
+    flat  = (flat + flat.transpose(0, 2, 1)) * 0.5
+    eigs  = np.linalg.eigvalsh(flat).min(axis=1)
+    alpha = np.where(eigs < eps, (eps - eigs) / (1 - eigs), 0.0)
+    eye   = np.eye(orig[-1])[None]
+    out   = (1 - alpha)[:, None, None] * flat + alpha[:, None, None] * eye
+    return out.reshape(orig)
+
+
+# =============================================================================
 # Fusion methods
 # =============================================================================
 

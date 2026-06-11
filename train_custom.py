@@ -23,6 +23,7 @@ from sklearn.covariance import OAS
 from sklearn.model_selection import LeaveOneGroupOut
 
 from fm import DiffeoCFM
+from fuse import ensure_spd
 from gaussian import DiffeoGauss
 
 
@@ -83,8 +84,9 @@ def run_split(split, cov_train, cov_val, y_train, y_val,
 parser = argparse.ArgumentParser()
 parser.add_argument("--data",   type=str, required=True,
                     help="Folder containing G##_EC_p.npy / G##_CPT_s.npy etc.")
-parser.add_argument("--region", type=str, default="s", choices=["p", "s"],
-                    help="Which channel group: p=前8ch, s=後8ch (default: s)")
+parser.add_argument("--region", type=str, default="s", choices=["p", "s", "inter_gram"],
+                    help="Which covariance to train on: p=Primary intra, s=Secondary intra, "
+                         "inter_gram=inter-brain Gram matrix inter@inter.T (default: s)")
 parser.add_argument("--max-aug", type=int, default=1, dest="max_aug",
                     help="Pool size: generate this many synthetic samples per real "
                          "training sample and save all of them (default 1).")
@@ -151,13 +153,17 @@ PATH_RESULTS.mkdir(exist_ok=True)
 # Load data
 # =============================================================================
 print(f"Loading data from {DATA_DIR} [region={REGION}] ...")
-# Scan G##_EC_{region}.npy (label=0) and G##_CPT_{region}.npy (label=1)
 COND_LABELS = {"EC": 0, "CPT": 1}
 all_X, all_y, all_groups = [], [], []
 
+# inter_gram loads the raw inter block and computes inter @ inter.T (Gram matrix)
+_glob_suffix = "inter" if REGION == "inter_gram" else REGION
+
 for cond, label in COND_LABELS.items():
-    for fpath in sorted(DATA_DIR.glob(f"G*_{cond}_{REGION}.npy")):
-        arr = np.load(fpath)                         # (n_trials, 8, 8)
+    for fpath in sorted(DATA_DIR.glob(f"G*_{cond}_{_glob_suffix}.npy")):
+        arr = np.load(fpath)                              # (n_trials, 8, 8)
+        if REGION == "inter_gram":
+            arr = ensure_spd(arr @ arr.transpose(0, 2, 1))   # inter @ inter.T → SPD
         sub_idx = int(fpath.stem.split("_")[0][1:]) - 1  # "G03" → 2
         all_X.append(arr)
         all_y.append(np.full(len(arr), label, dtype=np.int64))

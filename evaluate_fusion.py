@@ -32,7 +32,7 @@ from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_sco
 from sklearn.model_selection import LeaveOneGroupOut
 from sklearn.pipeline import make_pipeline
 
-from fuse import FUSION_METHODS
+from fuse import FUSION_METHODS, ensure_spd
 
 PATH_FIGURES = Path("figures")
 
@@ -73,23 +73,6 @@ print(f"Methods: {list(METHODS)}")
 # =============================================================================
 # Helpers
 # =============================================================================
-def ensure_spd(matrices, eps=1e-6):
-    """Always apply a small regularization to guarantee positive definiteness.
-    eps=1e-6 is large enough for Riemannian ops (TangentSpace), small enough
-    not to distort the data. Fusion ops (esp. matrix_product) can amplify
-    condition numbers, so unconditional regularization is safer than checking.
-    """
-    orig  = matrices.shape
-    flat  = matrices.reshape(-1, orig[-2], orig[-1])
-    # symmetrize (guards against tiny numerical asymmetry from fusion)
-    flat  = (flat + flat.transpose(0, 2, 1)) * 0.5
-    eigs  = np.linalg.eigvalsh(flat).min(axis=1)
-    alpha = np.where(eigs < eps, (eps - eigs) / (1 - eigs), 0.0)
-    eye   = np.eye(orig[-1])[None]
-    out   = (1 - alpha)[:, None, None] * flat + alpha[:, None, None] * eye
-    return out.reshape(orig)
-
-
 def score_subject(X_train, y_train, X_val):
     """Train TangentSpace + LR; return mean P(ASD) over val trials or None."""
     if len(np.unique(y_train)) < 2:

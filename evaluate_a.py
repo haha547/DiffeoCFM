@@ -41,7 +41,7 @@ PATH_FIGURES = Path("figures")
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", nargs="+", required=True,
                     help="Same folder(s) as train_custom.py --data")
-parser.add_argument("--region",    type=str, default="s", choices=["p", "s"])
+parser.add_argument("--region",    type=str, default="s", choices=["p", "s", "inter_gram"])
 parser.add_argument("--aug",       type=int, nargs="+", default=[1],
                     help="Augmentation factor(s) to evaluate (default: 1). "
                          "Must be ≤ --max-aug used during training.")
@@ -53,12 +53,13 @@ REGION      = args.region
 DATASETS    = [f"{Path(d).name}_{REGION}" for d in args.data]
 AUG_FACTORS = sorted(set(args.aug))
 N_JOBS      = args.jobs
+# inter_gram predicts Secondary's ASD (same label row as 's')
 REGION_ROW  = 0 if REGION == "p" else 1
 
 # Load subject-level ASD/TD labels
 g_info = scipy.io.loadmat(args.groupinfo)
 subject_diagnosis = g_info["GroupInfo"][0, 0]["condiction"][REGION_ROW, :]  # (43,)
-print(f"Region '{REGION}': "
+print(f"Region '{REGION}' (label row {REGION_ROW}): "
       f"{int(np.sum(subject_diagnosis == 1))} ASD, "
       f"{int(np.sum(subject_diagnosis == 0))} TD subjects.")
 
