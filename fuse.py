@@ -1,6 +1,14 @@
 """
-fuse.py — P/S region covariance matrix fusion library
-------------------------------------------------------
+fuse.py — P/S intra-brain covariance fusion library
+----------------------------------------------------
+Hyperscanning context: each G## session has two simultaneous subjects.
+The 16×16 joint covariance has blocks:
+    [ P_intra (8×8) | inter ]
+    [ inter^T       | S_intra ]
+P = Primary's intra-brain 8×8 block (G##_EC_p.npy)
+S = Secondary's intra-brain 8×8 block (G##_EC_s.npy)
+Note: intra >> inter in magnitude (within-brain EEG correlates much more than cross-brain).
+
 All functions accept two (n, d, d) or (d, d) SPD matrix arrays
 and return a fused array of the same shape.
 

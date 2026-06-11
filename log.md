@@ -4,16 +4,37 @@
 以 Diffeomorphic Conditional Flow Matching (DiffeoCFM) 生成 EEG 協方差矩陣，
 探討生成資料是否能改善 TD（正常發展）vs ASD（自閉症）的分類表現。
 
-資料：自訂 EEG 資料，8 通道，兩個條件（EC=閉眼靜息、CPT=任務），43 位受測者。
-預設使用 **Region S**（後 8 頻道），GroupInfo 中 S region：21 TD，22 ASD（接近平衡）。
+### 資料結構
+
+這是一個 **Hyperscanning（超掃描）** 實驗設定：同一 session 記錄 **兩位受測者**（一位 Primary、一位 Secondary）各 8 通道的 EEG，上下合併成 16 通道後計算協方差，得到 **16×16 聯合協方差矩陣**。
+
+```
+         P(8ch)    S(8ch)
+P(8ch) [  P_intra |  inter  ]   ← 左上: Primary 自身協方差（intra）
+S(8ch) [  inter^T | S_intra ]   ← 右下: Secondary 自身協方差（intra）
+                                   左下/右上: P-S 跨腦協方差（inter）
+```
+
+**重要特性：** Intra-brain 數值遠大於 inter-brain，因為同一大腦內的 EEG 訊號相關性高，跨腦的訊號相關性低。（數值分布的統計證明留作論文撰寫時補充。）
+
+目前使用的 `.npy` 檔是從 16×16 矩陣中**預先提取**的 8×8 intra 區塊：
+- `G##_EC_p.npy` → 左上 8×8，Primary 受測者的 intra-brain 協方差
+- `G##_EC_s.npy` → 右下 8×8，Secondary 受測者的 intra-brain 協方差
+- 左下 8×8 inter-brain 區塊目前尚未使用（潛在的分類特徵）
+
+受測者族群（每個 G## 代表一對 Primary+Secondary）：
+- **S（Secondary）**：21 TD，22 ASD（接近平衡）→ 預設使用
+- **P（Primary）**：38 TD，5 ASD（不平衡）
+- Availability 三行全非零者共 **34 對**（排除 9 對）
 
 ---
 
 ## 架構概覽
 
 ### 資料標籤
-- GroupInfo.mat → `condiction[1, :]`（row 1 = S region）→ 0=TD, 1=ASD
-- 資料檔案格式：`G##_EC_s.npy`、`G##_CPT_s.npy`（每筆 shape: (n_trials, 8, 8)）
+- GroupInfo.mat → `condiction[1, :]`（row 1 = Secondary）→ 0=TD, 1=ASD（分類目標）
+- 每個 G## 代表一對受測者；`.npy` 檔案是從 16×16 矩陣提取的 8×8 intra 區塊
+- shape: `(n_trials, 8, 8)`
 
 ### 兩條實驗路線
 
@@ -215,7 +236,7 @@ gen_tr_last = gen_pool_last[idx_first]            # (N, 8, 8)
 
 ### 2026-06-11 — 新實驗：P/S Region 融合
 
-**動機：** P（前額葉）和 S（感覺/枕葉）是兩組各 8 通道的 EEG 資料，各自生成 8×8 協方差。直接拼接成 16×16 資料量太大、訓練困難；改以數學融合方式將兩個 8×8 矩陣合成一個 8×8 矩陣，再做分類。
+**動機：** P（Primary）和 S（Secondary）是兩個受測者族群，各自生成 8×8 協方差矩陣。直接拼接成 16×16 資料量太大、訓練困難；改以數學融合方式將同一受測者編號的 P 和 S 兩個 8×8 矩陣合成一個 8×8 矩陣，再做分類。
 
 **新增檔案：**
 
@@ -236,7 +257,14 @@ gen_tr_last = gen_pool_last[idx_first]            # (N, 8, 8)
 
 **新增方法：** 在 `fuse.py` 底部的 `FUSION_METHODS` 字典加入即可。
 
-**使用：**
+**使用（腳本）：**
+```bash
+./run_fusion.sh                                   # 所有方法，Secondary 標籤
+./run_fusion.sh --label-row 0                     # 使用 Primary 標籤
+./run_fusion.sh --methods "arith_mean matrix_product"
+```
+
+**使用（直接）：**
 ```bash
 python evaluate_fusion.py --data "./cov_2s_0ov"
 python evaluate_fusion.py --data "./cov_2s_0ov" "./cov_4s_0ov" --methods arith_mean log_euclidean
@@ -251,6 +279,8 @@ python evaluate_fusion.py --data "./cov_2s_0ov" "./cov_4s_0ov" --methods arith_m
 ## 待辦事項 / 下一步
 
 - [x] `./run_all.sh --debug` 可以正常執行
+- [x] 修正 log 中 P/S 的錯誤描述（P=Primary 族群，S=Secondary 族群，非腦區）
+- [x] 建立 `run_fusion.sh`（執行 evaluate_fusion.py 的獨立腳本）
 - [x] Availability 過濾已實作（34 位有效 subjects）
 - [x] F1=0 / baseline=0.2 確認為 debug 模式正常現象
 - [ ] 重新以完整模式跑 `train_b.py` + `train_custom.py`（availability 過濾後結果會變）
@@ -260,3 +290,5 @@ python evaluate_fusion.py --data "./cov_2s_0ov" "./cov_4s_0ov" --methods arith_m
 - [ ] 比較融合方法 vs 單 region（p_only / s_only）的 ROC-AUC / F1
 - [ ] 若融合有改善，考慮加入 DiffeoCFM 生成流程（train_fusion.py）
 - [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢（完整訓練後）
+- [ ] 論文用：統計證明 intra-brain 數值分布 >> inter-brain（算各 block 的均值/方差分布即可）
+- [ ] 評估是否將 inter-brain 區塊也納入分類特徵（目前未使用）

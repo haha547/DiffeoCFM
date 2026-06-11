@@ -1,10 +1,17 @@
 """
 evaluate_fusion.py
 ------------------
-LOSO ASD/TD classification on fused P+S region covariances.
-No generative model — tests whether fusing both regions improves discrimination.
+LOSO ASD/TD classification on fused P+S intra-brain covariances.
 
-Includes single-region baselines (p_only, s_only) for direct comparison.
+Data structure: each session records two subjects (Primary + Secondary) simultaneously.
+The raw 16×16 covariance is block-structured:
+    [ P_intra (8×8) |  inter  ]
+    [  inter^T      | S_intra ]
+G##_EC_p.npy = P_intra block; G##_EC_s.npy = S_intra block.
+The inter-brain block is not used here.
+
+Fusion combines P_intra and S_intra → one 8×8 matrix for classification.
+Includes single-block baselines (p_only, s_only) for direct comparison.
 
 Usage:
     python evaluate_fusion.py --data "./cov_2s_0ov"
