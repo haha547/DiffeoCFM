@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import scipy.io
 import torch
 from scipy.spatial.distance import mahalanobis
 from sklearn.covariance import OAS
@@ -87,6 +88,7 @@ parser.add_argument("--region", type=str, default="s", choices=["p", "s"],
 parser.add_argument("--max-aug", type=int, default=1, dest="max_aug",
                     help="Pool size: generate this many synthetic samples per real "
                          "training sample and save all of them (default 1).")
+parser.add_argument("--groupinfo", type=str, default="GroupInfo.mat")
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
@@ -94,6 +96,11 @@ DATA_DIR   = Path(args.data)
 REGION     = args.region
 DEBUG      = args.debug
 MAX_AUG    = args.max_aug
+
+# Load availability filter: subject included only if all 3 entries are non-zero
+_g_info = scipy.io.loadmat(args.groupinfo)
+_avail  = _g_info["GroupInfo"][0, 0]["availability"]   # (3, 43)
+subject_available = np.all(_avail > 0, axis=0)         # (43,) bool
 
 # =============================================================================
 # Fixed settings (EEG-style, non-normalized SPD)
@@ -181,8 +188,17 @@ mask   = mask_abs & mask_maha
 X      = X[mask]
 y      = y[mask]
 groups = groups[mask]
-print(f"  After filtering: {X.shape[0]} samples remain  "
+print(f"  After outlier filter: {X.shape[0]} samples remain "
       f"(removed {mask.size - mask.sum()})")
+
+# Availability filter
+mask_avail = subject_available[groups]
+n_excl = int((~subject_available).sum())
+X      = X[mask_avail]
+y      = y[mask_avail]
+groups = groups[mask_avail]
+print(f"  After availability filter: {len(X)} samples "
+      f"({n_excl} subjects excluded, {int(subject_available.sum())} remain)")
 
 # =============================================================================
 # Train

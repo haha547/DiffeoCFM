@@ -128,6 +128,16 @@ def evaluate_split(dataset, group, method, split, path_method):
     train_time = float(load("training_time").flat[0])
     samp_time  = float(load("sampling_time").flat[0])
 
+    # Pool slicing: pool has N*max_aug samples; take one per original sample.
+    # Layout: [y[0]]*max_aug, [y[1]]*max_aug, ... → first of each group is at
+    # indices 0, max_aug, 2*max_aug, ...
+    aug_max_path = path_method / f"split_{split}_aug_factor_max.npy"
+    max_aug = int(np.load(aug_max_path)[0]) if aug_max_path.exists() else 1
+    N = len(ec_cpt_tr)
+    gen_pool_last = gen_train[-1]                    # (N*max_aug, 8, 8)
+    idx_first = np.arange(0, N * max_aug, max_aug)  # [0, max_aug, 2*max_aug, ...]
+    gen_tr_last = gen_pool_last[idx_first]           # (N, 8, 8)
+
     # Map subject index → ASD/TD
     diag_tr = subject_diagnosis[groups_tr]   # (N,)
     diag_va = subject_diagnosis[groups_va]   # (N_val,)
@@ -136,7 +146,6 @@ def evaluate_split(dataset, group, method, split, path_method):
     subject_id  = int(groups_va[0])
     y_true_subj = int(diag_va[0])
 
-    gen_tr_last = gen_train[-1]
     if not is_all_spd(gen_tr_last):
         gen_tr_last = project_on_SPD(gen_tr_last)
 

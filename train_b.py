@@ -98,6 +98,9 @@ PATH_RESULTS.mkdir(exist_ok=True)
 g_info = scipy.io.loadmat(args.groupinfo)
 # condiction: (2, 43)  row0=p, row1=s  |  0=TD, 1=ASD
 subject_diagnosis = g_info["GroupInfo"][0, 0]["condiction"][REGION_ROW, :]  # (43,)
+# availability: (3, 43)  —  include subject only if all 3 entries are non-zero
+_avail = g_info["GroupInfo"][0, 0]["availability"]          # (3, 43)
+subject_available = np.all(_avail > 0, axis=0)              # (43,) bool
 
 # =============================================================================
 # Load data  →  4-class label: asd*2 + cond_idx
@@ -144,7 +147,16 @@ mask   = mask_abs & mask_maha
 X      = X[mask]
 y      = y[mask]
 groups = groups[mask]
-print(f"  After filtering: {len(X)} samples  (removed {mask.size - mask.sum()})")
+print(f"  After outlier filter: {len(X)} samples  (removed {mask.size - mask.sum()})")
+
+# Availability filter: keep only subjects with all 3 availability entries non-zero
+mask_avail = subject_available[groups]
+n_excl = int((~subject_available).sum())
+X      = X[mask_avail]
+y      = y[mask_avail]
+groups = groups[mask_avail]
+print(f"  After availability filter: {len(X)} samples "
+      f"({n_excl} subjects excluded, {int(subject_available.sum())} remain)")
 
 
 # =============================================================================

@@ -156,10 +156,107 @@ python plot_aug.py
 
 ---
 
+### 2026-06-11 — 修正與新功能
+
+**修正 1：CUDA OOM（train_b.py / train_custom.py）**
+
+**問題：** `--max-aug 5` 時，`model.sample(y_train_aug)` 一次把 N×5 個樣本丟進 `odeint` → GPU OOM。
+
+**修正（run_split）：**
+- 改成迴圈呼叫 `model.sample(y_train)` `max_aug` 次，每次只用 N 個樣本
+- 結果用 `np.stack(sol_parts, axis=2).reshape(T, N*max_aug, 8, 8)` 組成正確的 pool
+- Pool 排列與 `np.repeat(y_train, max_aug)` 一致，evaluate_b.py 切片邏輯不需修改
+
+**修正 3：Availability 過濾（train_b.py / train_custom.py / evaluate_fusion.py）**
+
+`GroupInfo.mat` 的 `availability`（3×43）欄位記錄每位受測者三種資料的可用性。
+只有三行都非零的受測者才會納入訓練，共 **34 位**（排除 9 位）。
+
+| 腳本 | 修正內容 |
+|------|---------|
+| `train_b.py` | 資料過濾後再加一層 `subject_available[groups]` mask |
+| `train_custom.py` | 新增 `scipy.io` 載入 GroupInfo + 相同 availability mask |
+| `evaluate_fusion.py` | `load_fused()` 跳過 `subject_available[sub_idx] == False` 的受測者 |
+
+---
+
+**修正 4：evaluate_a.py pool 切片 Bug（plot_asd Direction A 缺圖）**
+
+**問題：** `train_custom.py --max-aug 5` 生成的 pool 有 N×5 個樣本；`evaluate_a.py` 用原始大小 N 的 mask 直接去 index (N×5, 8, 8) 陣列 → shape 不符 → 腳本崩潰 → `asd_classification_a.csv` 不存在 → `plot_asd.py` 跳過 Direction A。
+
+**修正：** 在 `evaluate_split` 加入 pool 切片邏輯：
+```python
+aug_max_path = path_method / f"split_{split}_aug_factor_max.npy"
+max_aug = int(np.load(aug_max_path)[0]) if aug_max_path.exists() else 1
+idx_first = np.arange(0, N * max_aug, max_aug)   # [0, max_aug, 2*max_aug, ...]
+gen_tr_last = gen_pool_last[idx_first]            # (N, 8, 8)
+```
+取每組 max_aug 個樣本中的第一個，等效於 aug_factor=1，與原始 mask shape 一致。
+
+---
+
+**關於 F1=0 / Baseline ROC-AUC=0.2（--debug 模式）**
+
+這是正常的。`--debug` 只跑 2 個 LOSO splits（2 位 subjects），聚合後只有 2 個 (y_true, y_score) 資料點，任何指標都沒有統計意義。完整訓練（43 splits）才能看到有意義的結果。
+
+---
+
+**修正 2：LogisticRegressionCV 過慢 + sklearn FutureWarning**
+
+**問題：** `LogisticRegressionCV(cv=5, Cs=10)` 每次 `score_subject` 跑 50 次 LR 訓練；同時觸發兩個 FutureWarning（`use_legacy_attributes`、`l1_ratios`）。
+
+**修正（evaluate_a.py / evaluate_b.py）：**
+- 換成 `LogisticRegression(C=1.0, solver="liblinear", class_weight="balanced", max_iter=1000)`
+- 每次 `score_subject` 只跑 1 次，43 splits 下約快 50×
+- 兩個 Warning 消失（僅 `LogisticRegressionCV` 特有）
+- TSTR 評估使用固定 C=1.0 是生成模型文獻的標準做法
+
+---
+
+### 2026-06-11 — 新實驗：P/S Region 融合
+
+**動機：** P（前額葉）和 S（感覺/枕葉）是兩組各 8 通道的 EEG 資料，各自生成 8×8 協方差。直接拼接成 16×16 資料量太大、訓練困難；改以數學融合方式將兩個 8×8 矩陣合成一個 8×8 矩陣，再做分類。
+
+**新增檔案：**
+
+| 檔案 | 說明 |
+|------|------|
+| `fuse.py` | 融合函式庫，含 `FUSION_METHODS` 字典，易擴充 |
+| `evaluate_fusion.py` | LOSO ASD/TD 分類，輸出 `figures/fusion_classification.csv` |
+
+**目前融合方法（`fuse.py`）：**
+
+| 方法名 | 公式 | 說明 |
+|--------|------|------|
+| `arith_mean` | (P + S) / 2 | 算術平均，最快，保 SPD |
+| `log_euclidean` | expm((logm(P) + logm(S)) / 2) | 幾何平均，符合 Riemannian 流形 |
+| `matrix_product` | P @ S @ P | 同餘變換，以 P 的座標系描述 S，保 SPD |
+| `p_only` | P | 基準：僅使用 P region |
+| `s_only` | S | 基準：僅使用 S region |
+
+**新增方法：** 在 `fuse.py` 底部的 `FUSION_METHODS` 字典加入即可。
+
+**使用：**
+```bash
+python evaluate_fusion.py --data "./cov_2s_0ov"
+python evaluate_fusion.py --data "./cov_2s_0ov" "./cov_4s_0ov" --methods arith_mean log_euclidean
+```
+
+**輸出：**
+- `figures/fusion_predictions.csv`：每位受測者的原始預測分數
+- `figures/fusion_classification.csv`：各方法的 ROC-AUC / F1 / Precision / Recall
+
+---
+
 ## 待辦事項 / 下一步
 
-- [ ] 在 Linux 主機上執行 `train_b.py --max-aug 5` 並驗證 pool 正確存檔
-- [ ] 執行 `evaluate_b.py --aug 1 2 3 5` 確認 LOSO bug 已修正且 AugFactor 欄位正確
-- [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢
-- [ ] 執行 `plot_asd.py` 比較 Direction A vs B 的結果
-- [ ] 確認 `availability` 欄位是否需要用來過濾缺失受測者
+- [x] `./run_all.sh --debug` 可以正常執行
+- [x] Availability 過濾已實作（34 位有效 subjects）
+- [x] F1=0 / baseline=0.2 確認為 debug 模式正常現象
+- [ ] 重新以完整模式跑 `train_b.py` + `train_custom.py`（availability 過濾後結果會變）
+- [ ] 重新跑 `evaluate_a.py`（pool 切片 bug 已修正，現在可以產生 asd_classification_a.csv）
+- [ ] 跑 `plot_asd.py` 確認 Direction A vs B 可以正常畫圖
+- [ ] 跑 `evaluate_fusion.py --data ./cov_2s_0ov` 測試 P/S 融合分類效果
+- [ ] 比較融合方法 vs 單 region（p_only / s_only）的 ROC-AUC / F1
+- [ ] 若融合有改善，考慮加入 DiffeoCFM 生成流程（train_fusion.py）
+- [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢（完整訓練後）
