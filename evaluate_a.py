@@ -257,7 +257,7 @@ if __name__ == "__main__":
 
     df_pred = pd.DataFrame(all_pred)
 
-    raw_csv = PATH_FIGURES / "asd_predictions_a.csv"
+    raw_csv = PATH_FIGURES / f"asd_predictions_a_{REGION}.csv"
     df_pred.to_csv(raw_csv, index=False, float_format="%.4f")
     print(f"Raw predictions → {raw_csv}  ({len(df_pred)} rows)")
 
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         print("Aggregation produced no rows — check class balance across splits.")
         sys.exit(1)
 
-    out_csv = PATH_FIGURES / "asd_classification_a.csv"
+    out_csv = PATH_FIGURES / f"asd_classification_a_{REGION}.csv"
     df_agg.to_csv(out_csv, index=False, float_format="%.3f")
     print(f"\nSaved → {out_csv}")
 

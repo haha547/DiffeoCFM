@@ -41,18 +41,16 @@ METHOD_NAMES = {
 }
 
 COMPARISON_LABELS = {
-    "Real→Val (baseline)": "Baseline\n(Real→Val)",
-    "Gen→Val (TSTR)":      "TSTR\n(Gen→Val)",
-    "Real→Gen (TRTS)":     "TRTS\n(Real→Gen)",
+    "Baseline (Real→Val)": "Baseline\n(Real→Val)",
+    "TSTR (Gen→Val)":      "TSTR\n(Gen→Val)",
 }
 
 CONDITION_ORDER = ["EC", "CPT", "All"]
 DIRECTION_ORDER = ["A", "B"]
 
 COMPARISON_COLORS = {
-    "Real→Val (baseline)": "#4C72B0",   # blue
-    "Gen→Val (TSTR)":      "#DD8452",   # orange
-    "Real→Gen (TRTS)":     "#55A868",   # green
+    "Baseline (Real→Val)": "#4C72B0",   # blue
+    "TSTR (Gen→Val)":      "#DD8452",   # orange
 }
 
 METRIC_COLS = {
@@ -64,36 +62,44 @@ METRIC_COLS = {
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def load_data(show_trts: bool) -> pd.DataFrame:
-    """Load and merge both direction CSVs."""
+    """Load Direction A/B CSVs for all regions (s, p, inter_gram)."""
     frames = []
-    for direction, fname in [("A", "asd_classification_a.csv"),
-                              ("B", "asd_classification_b.csv")]:
-        path = PATH_FIGURES / fname
+
+    # Direction A: one CSV per region
+    for region in ("s", "p", "inter_gram"):
+        path = PATH_FIGURES / f"asd_classification_a_{region}.csv"
         if not path.exists():
-            print(f"WARNING: {path} not found — skipping Direction {direction}.")
             continue
         df = pd.read_csv(path)
-        df["Direction"] = direction
+        df["Direction"] = "A"
         frames.append(df)
+        print(f"  Loaded A/{region}: {len(df)} rows")
+
+    # Direction B: one CSV per region
+    for region in ("s", "p", "inter_gram"):
+        path = PATH_FIGURES / f"asd_classification_b_{region}.csv"
+        if not path.exists():
+            continue
+        df = pd.read_csv(path)
+        df["Direction"] = "B"
+        frames.append(df)
+        print(f"  Loaded B/{region}: {len(df)} rows")
 
     if not frames:
         raise FileNotFoundError(
-            "No classification CSVs found. Run evaluate_a.py and/or evaluate_b.py first."
+            "No classification CSVs found.\n"
+            "Expected: figures/asd_classification_a_s.csv and/or asd_classification_b_s.csv\n"
+            "Run evaluate_a.py and/or evaluate_b.py first."
         )
 
     df = pd.concat(frames, ignore_index=True)
 
     # keep only wanted comparisons
-    wanted = ["Real→Val (baseline)", "Gen→Val (TSTR)"]
-    if show_trts:
-        wanted.append("Real→Gen (TRTS)")
+    wanted = ["Baseline (Real→Val)", "TSTR (Gen→Val)"]
     df = df[df["Comparison"].isin(wanted)].copy()
 
     # friendly method names
     df["Method"] = df["Method"].map(METHOD_NAMES).fillna(df["Method"])
-
-    # strip dataset suffix "_p" / "_s" for display (already encoded in path)
-    df["DatasetShort"] = df["Dataset"].str.replace(r"_(p|s)$", "", regex=True)
 
     return df
 
@@ -103,10 +109,13 @@ def get_datasets(df: pd.DataFrame) -> list[str]:
 
 
 def dataset_title(ds: str) -> str:
-    """Turn cov_2s_0ov_s → Cov 2s 0% OV (S)"""
+    """Turn cov_2s_0ov_s → 'Cov 2s 0OV [S]', cov_2s_0ov_inter_gram → '... [Inter-brain]'"""
+    if ds.endswith("_inter_gram"):
+        base = ds[:-len("_inter_gram")].replace("cov_", "").replace("ov", "OV").replace("_", " ")
+        return f"Dataset: {base}  [Inter-brain Gram]"
     parts = ds.replace("cov_", "").replace("ov", "OV").split("_")
-    region = parts[-1].upper() if parts[-1] in ("s", "p") else ""
-    rest = " ".join(parts[:-1]) if region else " ".join(parts)
+    region = parts[-1].upper() if parts[-1] in ("S", "P", "s", "p") else ""
+    rest   = " ".join(parts[:-1]) if region else " ".join(parts)
     return f"Dataset: {rest}{f'  [{region} region]' if region else ''}"
 
 
@@ -220,19 +229,16 @@ def plot_dataset(df_ds: pd.DataFrame, dataset: str, metric_col: str,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--metric",   default="f1", choices=["f1", "roc_auc"],
+    parser.add_argument("--metric", default="f1", choices=["f1", "roc_auc"],
                         help="Metric to plot (default: f1)")
-    parser.add_argument("--no-trts", action="store_true",
-                        help="Hide TRTS (Real→Gen) bars to keep the plot cleaner")
     args = parser.parse_args()
 
     metric_col = METRIC_COLS[args.metric]
-    show_trts  = not args.no_trts
 
     PATH_FIGURES.mkdir(exist_ok=True)
 
-    print(f"Loading classification CSVs  [metric={metric_col}, TRTS={'on' if show_trts else 'off'}]")
-    df = load_data(show_trts=show_trts)
+    print(f"Loading classification CSVs  [metric={metric_col}]")
+    df = load_data(show_trts=False)
 
     datasets = get_datasets(df)
     print(f"Found {len(datasets)} dataset(s): {datasets}")

@@ -43,7 +43,7 @@ PATH_FIGURES = Path("figures")
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", nargs="+", required=True,
                     help="Same folder(s) as train_b.py --data")
-parser.add_argument("--region", type=str, default="s", choices=["p", "s"])
+parser.add_argument("--region", type=str, default="s", choices=["p", "s", "inter_gram"])
 parser.add_argument("--aug",    type=int, nargs="+", default=[1],
                     help="Augmentation factor(s) to evaluate. "
                          "E.g. --aug 1 2 3 5 10. Each value k uses k× generated "
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     df_pred = pd.DataFrame(all_pred)
 
     # Save raw predictions (useful for debugging)
-    raw_csv = PATH_FIGURES / "asd_predictions_b.csv"
+    raw_csv = PATH_FIGURES / f"asd_predictions_b_{REGION}.csv"
     df_pred.to_csv(raw_csv, index=False, float_format="%.4f")
     print(f"Raw predictions → {raw_csv}  ({len(df_pred)} rows)")
 
@@ -323,7 +323,7 @@ if __name__ == "__main__":
         print("Aggregation produced no rows — check class balance across splits.")
         sys.exit(1)
 
-    out_csv = PATH_FIGURES / "asd_classification_b.csv"
+    out_csv = PATH_FIGURES / f"asd_classification_b_{REGION}.csv"
     df_agg.to_csv(out_csv, index=False, float_format="%.3f")
     print(f"\nSaved → {out_csv}")
 

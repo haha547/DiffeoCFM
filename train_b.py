@@ -27,6 +27,7 @@ from sklearn.covariance import OAS
 from sklearn.model_selection import LeaveOneGroupOut
 
 from fm import DiffeoCFM
+from fuse import ensure_spd
 
 
 # =============================================================================
@@ -35,7 +36,7 @@ from fm import DiffeoCFM
 parser = argparse.ArgumentParser()
 parser.add_argument("--data",      type=str, required=True,
                     help="Folder containing G##_EC_p.npy / G##_CPT_s.npy etc.")
-parser.add_argument("--region",    type=str, default="s", choices=["p", "s"])
+parser.add_argument("--region",    type=str, default="s", choices=["p", "s", "inter_gram"])
 parser.add_argument("--groupinfo", type=str, default="GroupInfo.mat")
 parser.add_argument("--max-aug",   type=int, default=1, dest="max_aug",
                     help="Pool size: generate this many synthetic samples per real "
@@ -111,9 +112,13 @@ print(f"Loading data from {DATA_DIR} [region={REGION}] ...")
 COND_MAP = {"EC": 0, "CPT": 1}
 all_X, all_y, all_groups = [], [], []
 
+_glob_suffix = "inter" if REGION == "inter_gram" else REGION
+
 for cond_name, cond_idx in COND_MAP.items():
-    for fpath in sorted(DATA_DIR.glob(f"G*_{cond_name}_{REGION}.npy")):
+    for fpath in sorted(DATA_DIR.glob(f"G*_{cond_name}_{_glob_suffix}.npy")):
         arr     = np.load(fpath)                              # (n_trials, 8, 8)
+        if REGION == "inter_gram":
+            arr = ensure_spd(arr @ arr.transpose(0, 2, 1))   # inter @ inter.T → SPD
         sub_idx = int(fpath.stem.split("_")[0][1:]) - 1      # "G03" → 2
         asd     = int(subject_diagnosis[sub_idx])             # 0=TD, 1=ASD
         label   = asd * 2 + cond_idx                         # 0/1/2/3

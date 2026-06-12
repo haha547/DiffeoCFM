@@ -136,4 +136,25 @@ else
 fi
 
 echo ""
+echo "====== Direction B_inter: Training (train_b.py --region inter_gram) ======"
+for ds in "${DATASETS[@]}"; do
+    echo "--- $ds ---"
+    if [ ! -d "./$ds" ]; then
+        echo "  WARNING: ./$ds not found, skipping."
+        continue
+    fi
+    "$PYTHON" train_b.py --data "./$ds" --region inter_gram --max-aug "$MAX_AUG" $EXTRA_ARGS
+done
+
+echo ""
+echo "====== Direction B_inter: Evaluate ASD/TD (evaluate_b.py --region inter_gram) ======"
+if [ ${#DATA_ARGS[@]} -gt 0 ]; then
+    "$PYTHON" evaluate_b.py --data "${DATA_ARGS[@]}" \
+        --region inter_gram --aug $AUG_TEST || \
+        echo "  WARNING: evaluate_b.py (inter_gram) failed"
+else
+    echo "  No data found, skipping."
+fi
+
+echo ""
 echo "====== All done. CSVs and figures in figures/ ======"

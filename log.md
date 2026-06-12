@@ -38,17 +38,15 @@ S(8ch) [  inter^T | S_intra ]   ← 右下: Secondary 自身協方差（intra）
 - 每個 G## 代表一對受測者；`.npy` 檔案是從 16×16 矩陣提取的 8×8 intra 區塊
 - shape: `(n_trials, 8, 8)`
 
-### 三條實驗路線
+### 四條實驗路線
 
-| | Direction A | Direction A_inter | Direction B |
-|--|--|--|--|
-| 訓練腳本 | `train_custom.py` | `train_custom.py --region inter_gram` | `train_b.py` |
-| 輸入協方差 | S_intra (8×8) | inter @ inter.T (8×8) | S_intra (8×8) |
-| 條件標籤 y | EC=0 / CPT=1 | EC=0 / CPT=1 | TD-EC=0…ASD-CPT=3 |
-| 生成器知道診斷? | 否 | 否 | 是 |
-| 結果目錄 | `results/` | `results/` (不同 dataset_name) | `results_b/` |
-| ASD/TD 評估腳本 | `evaluate_a.py` | `evaluate_a.py --region inter_gram` | `evaluate_b.py` |
-| 科學假設 | Secondary intra-brain 含 ASD 訊號 | 跨腦 coupling (inter_gram) 含 ASD 訊號 | 4-class 聯合標籤 |
+| | Direction A | Direction A_inter | Direction B | Direction B_inter |
+|--|--|--|--|--|
+| 訓練腳本 | `train_custom.py` | `train_custom.py --region inter_gram` | `train_b.py` | `train_b.py --region inter_gram` |
+| 輸入協方差 | S_intra (8×8) | inter @ inter.T | S_intra (8×8) | inter @ inter.T |
+| 條件標籤 y | EC/CPT | EC/CPT | TD-EC/TD-CPT/ASD-EC/ASD-CPT | TD-EC/TD-CPT/ASD-EC/ASD-CPT |
+| 生成器知道診斷? | 否 | 否 | 是 | 是 |
+| 輸出 CSV | `asd_classification_a_s.csv` | `asd_classification_a_inter_gram.csv` | `asd_classification_b_s.csv` | `asd_classification_b_inter_gram.csv` |
 
 ### 評估策略（LOSO）
 - 外層：LeaveOneGroupOut（每次留一位 subject 作為 val）
@@ -341,8 +339,9 @@ inter   = cov16[8:, :8]    → G##_*_inter.npy  (bonus: 同時產生 inter block
 - [x] F1=0 / baseline=0.2 確認為 debug 模式正常現象
 - [x] **`phase1_cov.py` 修正**（alignment + normalize=True + inter.npy 同時產生）
 - [x] `./run_fusion.sh` 完成，inter_gram > s_only ROC-AUC/F1
-- [ ] **重新跑 `./run_all.sh`**（現在包含 Direction A_inter；train_custom.py 支援 `--region inter_gram`）
-- [ ] 比較 Direction A_inter TSTR vs Direction A TSTR：生成的 inter_gram 是否比 s_only 更有助於分類？
-- [ ] 跑 `plot_asd.py` 確認 Direction A / A_inter / B 畫圖正常
-- [ ] 執行 `plot_aug.py` 觀察 TSTR 隨 aug 倍率的變化趨勢
+- [x] 重新跑 `./run_all.sh`（Direction A + A_inter 完成）
+- [x] `plot_aug.py` 正常
+- [ ] **重新跑 `./run_all.sh`**（加入 Direction B_inter；plot_asd.py Comparison 字串 bug 已修正）
+- [ ] 跑 `plot_asd.py` 確認四條路線畫圖（輸出改為 `asd_classification_{a|b}_{region}.csv`）
+- [ ] 比較 TSTR vs Baseline：TSTR > Baseline 代表生成資料有助於 ASD 分類
 - [ ] 論文用：統計證明 intra-brain 數值分布 >> inter-brain（算各 block 的均值/方差分布即可）
